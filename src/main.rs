@@ -1,11 +1,6 @@
 use std::env;
-// use std::cmp;
-// use std::fs;
 use std::io::{Write};
-// use std::path::{Path, PathBuf};
 use std::process;
-// use std::sync::Arc;
-// use std::time::SystemTime;
 use std::error;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use serde_json as json;
@@ -14,7 +9,6 @@ pub mod cli;
 use cli::{Args};
 
 pub type Result<T> = ::std::result::Result<T, Box<dyn error::Error>>;
-
 
 fn main() {
     if let Err(err) = Args::parse(env::args_os()).and_then(try_main) {
@@ -57,5 +51,6 @@ fn try_main(args: Args) -> Result<()> {
             writeln!(&mut stdout, "{}", res.text().unwrap())?;
         }
     }
-    process::exit(0)
+
+    return Ok(());
 }

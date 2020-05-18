@@ -4,7 +4,64 @@ use std::ffi::{OsString};
 
 use crate::{Result};
 
+const USAGE: &'static str = "\
+USAGE: wx [FLAGS] [METHOD] URL [PARAM [PARAM ...]]
+
+webfox (wx) is a json-default, simple HTTP client in the spirit of httpie.
+
+FLAGS:
+    -f, --form        Encode body as application/x-www-form-urlencoded
+    -d, --debug       Print request headers and body
+    -h, --help        Print this help message
+    -v, --version     Print version information
+
+METHOD:
+    The case sensitive HTTP method to be used for the request, allowed:
+
+    GET, POST, PUT, HEAD, PATCH, DELETE, CONNECT, TRACE
+
+    Defaults to POST if any data is to be sent, otherwise GET is used.
+
+URL:
+
+PARAM:
+    Optional key-value pairs specifying a http header, query string or data
+    to be included in the request. Can be specified in any order.
+
+    name:value - HTTP Header
+
+        Host:google.com X-Api-Key:notverysecure
+
+    name=value - Body data (string)
+
+        first=john last=doe name=\"john doe\"
+
+        form --> first=john&last=doe&name=john%20doe
+        json --> {{
+            \"first\": \"john\",
+            \"last\": \"doe\",
+            \"name\": \"john doe\"
+        }}
+
+    name:=value - JSON body data
+
+        values:='[1,2,3]' quit:=true tree:='{{\"name\":\"root\", \"children\":[]}}'
+
+        json --> {{
+            \"values\": [1,2,3],
+            \"quit\": true,
+            \"tree\": {{
+                \"name\": \"root\",
+                \"children\": []
+            }}
+        }}
+
+
+https://github.com/smeets/webfox
+Axel Smeets <murlocbrand@gmail.com>";
+
 /// Content type of the sent request
+#[derive(Debug, PartialEq)]
 pub enum ContentType {
     /// application/x-www-form-urlencoded
     Form,
@@ -14,7 +71,6 @@ pub enum ContentType {
     Multipart
 }
 
-/// Parsed and collected arguments
 pub struct Args {
     pub method: reqwest::Method,
     pub url: String,
@@ -53,8 +109,8 @@ impl Args {
         let mut parsed_method = false;
 
         let options = vec![
-            Arg{ short: 'h', long: "help",    cb: |_args: &mut Args| print_usage() },
-            Arg{ short: 'v', long: "version", cb: |_args: &mut Args| print_version() },
+            Arg{ short: 'h', long: "help",    cb: print_usage },
+            Arg{ short: 'v', long: "version", cb: print_version },
             Arg{ short: 'f', long: "form",    cb: |args: &mut Args| args.format = ContentType::Form },
             Arg{ short: 'm', long: "multi",   cb: |args: &mut Args| args.format = ContentType::Multipart },
             Arg{ short: 'd', long: "debug",   cb: |_args: &mut Args| {} },
@@ -163,67 +219,70 @@ impl Args {
     }
 }
 
-fn print_usage() {
-    eprintln!("\
-USAGE: wx [FLAGS] [METHOD] URL [PARAM [PARAM ...]]
-
-webfox (wx) is a json-default, simple HTTP client in the spirit of httpie.
-
-FLAGS:
-    -f, --form        Encode body as application/x-www-form-urlencoded
-    -d, --debug       Print request headers and body
-    -h, --help        Print this help message
-    -v, --version     Print version information
-
-METHOD:
-    The case sensitive HTTP method to be used for the request, allowed:
-
-    GET, POST, PUT, HEAD, PATCH, DELETE, CONNECT, TRACE
-
-    Defaults to POST if any data is to be sent, otherwise GET is used.
-
-URL:
-
-PARAM:
-    Optional key-value pairs specifying a http header, query string or data
-    to be included in the request. Can be specified in any order.
-
-    name:value - HTTP Header
-
-        Host:google.com X-Api-Key:notverysecure
-
-    name=value - Body data (string)
-
-        first=john last=doe name=\"john doe\"
-
-        form --> first=john&last=doe&name=john%20doe
-        json --> {{
-            \"first\": \"john\",
-            \"last\": \"doe\",
-            \"name\": \"john doe\"
-        }}
-
-    name:=value - JSON body data
-
-        values:='[1,2,3]' quit:=true tree:='{{\"name\":\"root\", \"children\":[]}}'
-
-        json --> {{
-            \"values\": [1,2,3],
-            \"quit\": true,
-            \"tree\": {{
-                \"name\": \"root\",
-                \"children\": []
-            }}
-        }}
-
-
-https://github.com/smeets/webfox
-Axel Smeets <murlocbrand@gmail.com>");
-
+fn print_usage(_args: &mut Args) {
+    eprintln!("{}", USAGE);
     process::exit(0);
 }
 
-fn print_version() {
+fn print_version(_args: &mut Args) {
     eprintln!("{:}", env!("CARGO_PKG_VERSION"));
     process::exit(0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn longopts() {
+        let args = Args::parse(vec!["program", "--form"]).unwrap();
+        assert_eq!(args.format, ContentType::Form);
+    }
+
+    #[test]
+    fn shortops() {
+        let args = Args::parse(vec!["program", "-fm"]).unwrap();
+        assert_eq!(args.format, ContentType::Multipart);
+
+        let args = Args::parse(vec!["program", "-mf"]).unwrap();
+        assert_eq!(args.format, ContentType::Form);
+    }
+
+    #[test]
+    fn method() {
+        // implicit GET
+        let args = Args::parse(vec!["program", "someurl.com"]).unwrap();
+        assert_eq!(args.method, reqwest::Method::GET);
+
+        let methods = vec![
+            ("GET", reqwest::Method::GET),
+            ("POST", reqwest::Method::POST),
+            ("PUT", reqwest::Method::PUT),
+            ("PATCH", reqwest::Method::PATCH),
+            ("HEAD", reqwest::Method::HEAD),
+            ("OPTIONS", reqwest::Method::OPTIONS),
+            ("CONNECT", reqwest::Method::CONNECT),
+            ("TRACE", reqwest::Method::TRACE)
+        ];
+        // explicit method
+        for (name, method) in methods {
+            let args = Args::parse(vec!["program", name, "someurl.com"]).unwrap();
+            assert_eq!(args.method, method);
+        }
+    }
+
+    #[test]
+    fn url_rules() {
+        // implicit localhost
+        let args = Args::parse(vec!["program", ":/hej"]).unwrap();
+        assert_eq!(args.url, "http://localhost/hej");
+
+        // implicit localhost with port
+        let args = Args::parse(vec!["program", ":3000/hej"]).unwrap();
+        assert_eq!(args.url, "http://localhost:3000/hej");
+
+        // implicit http
+        let args = Args::parse(vec!["program", "somesite.com:3000/hej"]).unwrap();
+        assert_eq!(args.url, "http://somesite.com:3000/hej");
+    }
 }
