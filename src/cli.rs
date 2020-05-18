@@ -1,64 +1,16 @@
-use std::process;
-use std::vec::{Vec};
-use std::ffi::{OsString};
+use std::ffi::OsString;
+use std::vec::Vec;
 
-use crate::{Result};
+use crate::Result;
 
-const USAGE: &'static str = "\
-USAGE: wx [FLAGS] [METHOD] URL [PARAM [PARAM ...]]
-
-webfox (wx) is a json-default, simple HTTP client in the spirit of httpie.
-
-FLAGS:
-    -f, --form        Encode body as application/x-www-form-urlencoded
-    -d, --debug       Print request headers and body
-    -h, --help        Print this help message
-    -v, --version     Print version information
-
-METHOD:
-    The case sensitive HTTP method to be used for the request, allowed:
-
-    GET, POST, PUT, HEAD, PATCH, DELETE, CONNECT, TRACE
-
-    Defaults to POST if any data is to be sent, otherwise GET is used.
-
-URL:
-
-PARAM:
-    Optional key-value pairs specifying a http header, query string or data
-    to be included in the request. Can be specified in any order.
-
-    name:value - HTTP Header
-
-        Host:google.com X-Api-Key:notverysecure
-
-    name=value - Body data (string)
-
-        first=john last=doe name=\"john doe\"
-
-        form --> first=john&last=doe&name=john%20doe
-        json --> {{
-            \"first\": \"john\",
-            \"last\": \"doe\",
-            \"name\": \"john doe\"
-        }}
-
-    name:=value - JSON body data
-
-        values:='[1,2,3]' quit:=true tree:='{{\"name\":\"root\", \"children\":[]}}'
-
-        json --> {{
-            \"values\": [1,2,3],
-            \"quit\": true,
-            \"tree\": {{
-                \"name\": \"root\",
-                \"children\": []
-            }}
-        }}
-
-
-https://github.com/smeets/webfox
-Axel Smeets <murlocbrand@gmail.com>";
+pub enum Command {
+    /// Run query and exit
+    Request,
+    /// Print help / usage and exit
+    PrintHelp,
+    /// Print version information and exit
+    PrintVersion,
+}
 
 /// Content type of the sent request
 #[derive(Debug, PartialEq)]
@@ -68,10 +20,39 @@ pub enum ContentType {
     /// application/json
     Json,
     /// multipart/form-data
-    Multipart
+    Multipart,
+}
+
+/// >X
+#[derive(Debug)]
+struct ParseError {
+    ctx: String,
+}
+
+impl ParseError {
+    fn new(ctx: String) -> ParseError {
+        return ParseError { ctx: ctx };
+    }
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.ctx)
+    }
+}
+
+impl std::error::Error for ParseError {
+    fn description(&self) -> &str {
+        self.ctx.as_str()
+    }
+
+    fn cause(&self) -> Option<&dyn std::error::Error> {
+        None
+    }
 }
 
 pub struct Args {
+    pub command: Command,
     pub method: reqwest::Method,
     pub url: String,
     pub header: reqwest::header::HeaderMap,
@@ -88,7 +69,8 @@ struct Arg {
 
 impl Args {
     pub fn new() -> Self {
-        Self{
+        Self {
+            command: Command::Request,
             method: reqwest::Method::GET,
             url: String::with_capacity(100),
             header: reqwest::header::HeaderMap::new(),
@@ -109,17 +91,35 @@ impl Args {
         let mut parsed_method = false;
 
         let options = vec![
-            Arg{ short: 'h', long: "help",    cb: print_usage },
-            Arg{ short: 'v', long: "version", cb: print_version },
-            Arg{ short: 'f', long: "form",    cb: |args: &mut Args| args.format = ContentType::Form },
-            Arg{ short: 'm', long: "multi",   cb: |args: &mut Args| args.format = ContentType::Multipart },
-            Arg{ short: 'd', long: "debug",   cb: |_args: &mut Args| {} },
-            Arg{ short: 'm', long: "multi",   cb: |_args: &mut Args| {} },
+            Arg {
+                short: 'h',
+                long: "help",
+                cb: |args: &mut Args| args.command = Command::PrintHelp,
+            },
+            Arg {
+                short: 'v',
+                long: "version",
+                cb: |args: &mut Args| args.command = Command::PrintVersion,
+            },
+            Arg {
+                short: 'f',
+                long: "form",
+                cb: |args: &mut Args| args.format = ContentType::Form,
+            },
+            Arg {
+                short: 'm',
+                long: "multi",
+                cb: |args: &mut Args| args.format = ContentType::Multipart,
+            },
+            Arg { short: 'd', long: "debug", cb: |_args: &mut Args| {} },
+            Arg { short: 'm', long: "multi", cb: |_args: &mut Args| {} },
         ];
 
         let mut iter = args.into_iter().enumerate();
         while let Some((i, k)) = iter.next() {
-            if i == 0 { continue; }
+            if i == 0 {
+                continue;
+            }
 
             let arg = k.clone().into();
             let argv = arg.to_str();
@@ -137,8 +137,10 @@ impl Args {
                         }
                     }
                     if !found {
-                        eprintln!("unknown option: {:}", text);
-                        process::exit(1);
+                        return Err(Box::new(ParseError::new(format!(
+                            "unknown option: {}",
+                            text
+                        ))));
                     }
                     continue;
                 } else if text.starts_with("-") {
@@ -153,8 +155,10 @@ impl Args {
                             }
                         }
                         if !found {
-                            eprintln!("unknown option: {:}", copt);
-                            process::exit(1);
+                            return Err(Box::new(ParseError::new(format!(
+                                "unknown option: {}",
+                                copt
+                            ))));
                         }
                     }
                     continue;
@@ -174,7 +178,7 @@ impl Args {
                     Some("TRACE") => Ok(reqwest::Method::TRACE),
                     Some("CONNECT") => Ok(reqwest::Method::CONNECT),
                     Some(_) => Err(()),
-                    None => Err(())
+                    None => Err(()),
                 };
 
                 if let Ok(m) = method {
@@ -205,28 +209,20 @@ impl Args {
                 }
 
                 parsed_url = true;
-                continue
+                continue;
             }
 
             // otherwise, try to parse request items
 
             // finally, if we didn't parse anything yet this is not a valid arg
-            eprintln!("invalid argument: {:}", argv.unwrap());
-            process::exit(1);
+            return Err(Box::new(ParseError::new(format!(
+                "invalid argument: {:}",
+                argv.unwrap()
+            ))));
         }
 
         return Ok(parsed_args);
     }
-}
-
-fn print_usage(_args: &mut Args) {
-    eprintln!("{}", USAGE);
-    process::exit(0);
-}
-
-fn print_version(_args: &mut Args) {
-    eprintln!("{:}", env!("CARGO_PKG_VERSION"));
-    process::exit(0);
 }
 
 #[cfg(test)]
@@ -262,11 +258,12 @@ mod tests {
             ("HEAD", reqwest::Method::HEAD),
             ("OPTIONS", reqwest::Method::OPTIONS),
             ("CONNECT", reqwest::Method::CONNECT),
-            ("TRACE", reqwest::Method::TRACE)
+            ("TRACE", reqwest::Method::TRACE),
         ];
         // explicit method
         for (name, method) in methods {
-            let args = Args::parse(vec!["program", name, "someurl.com"]).unwrap();
+            let args =
+                Args::parse(vec!["program", name, "someurl.com"]).unwrap();
             assert_eq!(args.method, method);
         }
     }
@@ -282,7 +279,8 @@ mod tests {
         assert_eq!(args.url, "http://localhost:3000/hej");
 
         // implicit http
-        let args = Args::parse(vec!["program", "somesite.com:3000/hej"]).unwrap();
+        let args =
+            Args::parse(vec!["program", "somesite.com:3000/hej"]).unwrap();
         assert_eq!(args.url, "http://somesite.com:3000/hej");
     }
 }
