@@ -35,10 +35,20 @@ fn run_request(args: Args) -> Result<()> {
     };
 
     let client = reqwest::blocking::Client::new();
-    let res = client
+    let req = client
         .request(args.method, url)
-        .body("the exact body that is sent")
-        .send()?;
+        .query(&args.query)
+        .headers(args.headers);
+
+    let res = if args.data.len() > 0 {
+        match args.format {
+            cli::ContentType::Form => req.form(&args.data),
+            cli::ContentType::Json => req.json(&args.data),
+            cli::ContentType::Multipart => req.multipart(reqwest::blocking::multipart::Form::new()),
+        }
+    } else {
+        req
+    }.send()?;
 
     let mut stdout = StandardStream::stdout(ColorChoice::Always);
     println!("{:?} {:?}", res.version(), res.status());
