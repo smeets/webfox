@@ -51,6 +51,14 @@ impl std::error::Error for ParseError {
     }
 }
 
+#[derive(Debug, PartialEq)]
+enum RequestItemType {
+    Unknown,
+    Header,
+    KeyVal,
+    RawJson,
+}
+
 pub struct Args {
     pub command: Command,
     pub method: reqwest::Method,
@@ -213,6 +221,19 @@ impl Args {
             }
 
             // otherwise, try to parse request items
+            if let Some((typ, (key, val))) = parse_var(argv.unwrap().to_string()) {
+                match typ {
+                    RequestItemType::Header => {
+                        let header = reqwest::header::HeaderName::from_bytes(key.as_bytes())?;
+                        parsed_args.headers.insert(header, val.parse()?);
+                    },
+                    RequestItemType::KeyVal | RequestItemType::RawJson => {
+                        parsed_args.data.push((key, val));
+                    },
+                    _ => panic!("got unknown request item")
+                }
+                continue;
+            }
 
             // finally, if we didn't parse anything yet this is not a valid arg
             return Err(Box::new(ParseError::new(format!(
@@ -223,6 +244,39 @@ impl Args {
 
         return Ok(parsed_args);
     }
+}
+
+fn parse_var(arg: String) -> Option<(RequestItemType, (String,String))> {
+    let mut iter = arg.char_indices().peekable();
+    while let Some((i, c)) = iter.next() {
+        let typ = if c == ':' {
+            // a:b || a:=b
+            match iter.peek() {
+                Some(&(_, k)) if k == '=' => RequestItemType::RawJson,
+                _ => RequestItemType::Header,
+            }
+        } else if c == '=' {
+            // a=b
+            RequestItemType::KeyVal
+        } else {
+            RequestItemType::Unknown
+        };
+
+        if typ != RequestItemType::Unknown {
+            let var = match typ {
+                RequestItemType::RawJson => {
+                    (arg[0..i].to_string(), arg[i+2..].to_string())
+                },
+                RequestItemType::KeyVal | RequestItemType::Header => {
+                    (arg[0..i].to_string(), arg[i+1..].to_string())
+                },
+                _ => panic!("probably forgot to add parser for new request item")
+            };
+            return Some((typ, var));
+
+        }
+    }
+    return None
 }
 
 #[cfg(test)]
@@ -282,5 +336,13 @@ mod tests {
         let args =
             Args::parse(vec!["program", "somesite.com:3000/hej"]).unwrap();
         assert_eq!(args.url, "http://somesite.com:3000/hej");
+    }
+
+    #[test]
+    fn request_items() {
+        let test1 = parse_var(String::from("x-api-key:1")).unwrap();
+        assert_eq!(test1.0, RequestItemType::Header);
+        assert_eq!((test1.1).0, "x-api-key");
+        assert_eq!((test1.1).1, "1");
     }
 }

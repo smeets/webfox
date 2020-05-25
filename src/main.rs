@@ -34,8 +34,7 @@ fn run_request(args: Args) -> Result<()> {
         }
     };
 
-    let client = reqwest::blocking::Client::new();
-    let req = client
+    let req = reqwest::blocking::Client::new()
         .request(args.method, url)
         .query(&args.query)
         .headers(args.headers);
@@ -64,7 +63,7 @@ fn run_request(args: Args) -> Result<()> {
     if let Some(content_type) =
         res.headers().get(reqwest::header::CONTENT_TYPE)
     {
-        if content_type == "application/json" {
+        if content_type.to_str()?.contains("application/json") {
             let message = res.json::<json::Value>().unwrap();
             json::to_writer_pretty(&mut stdout, &message)?;
             println!("");
