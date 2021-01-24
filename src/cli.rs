@@ -3,6 +3,7 @@ use std::vec::Vec;
 
 use crate::Result;
 
+#[derive(Debug, PartialEq)]
 pub enum Command {
     /// Run query and exit
     Request,
@@ -52,11 +53,11 @@ impl std::error::Error for ParseError {
 }
 
 #[derive(Debug, PartialEq)]
-enum RequestItemType {
-    Unknown,
+pub enum RequestItemType {
     Header,
     KeyVal,
     RawJson,
+    Query,
 }
 
 pub struct Args {
@@ -65,7 +66,7 @@ pub struct Args {
     pub url: String,
     pub headers: reqwest::header::HeaderMap,
     pub query: Vec<(String, String)>,
-    pub data: Vec<(String, String)>,
+    pub data: Vec<(RequestItemType, String, String)>,
     pub format: ContentType,
 }
 
@@ -176,20 +177,19 @@ impl Args {
             // optionally try to parse a method
             if !parsed_method {
                 let method = match argv {
-                    Some("GET") => Ok(reqwest::Method::GET),
-                    Some("PUT") => Ok(reqwest::Method::PUT),
-                    Some("HEAD") => Ok(reqwest::Method::HEAD),
-                    Some("POST") => Ok(reqwest::Method::POST),
-                    Some("PATCH") => Ok(reqwest::Method::PATCH),
-                    Some("OPTIONS") => Ok(reqwest::Method::OPTIONS),
-                    Some("DELETE") => Ok(reqwest::Method::DELETE),
-                    Some("TRACE") => Ok(reqwest::Method::TRACE),
-                    Some("CONNECT") => Ok(reqwest::Method::CONNECT),
-                    Some(_) => Err(()),
-                    None => Err(()),
+                    Some("GET") => Some(reqwest::Method::GET),
+                    Some("PUT") => Some(reqwest::Method::PUT),
+                    Some("HEAD") => Some(reqwest::Method::HEAD),
+                    Some("POST") => Some(reqwest::Method::POST),
+                    Some("PATCH") => Some(reqwest::Method::PATCH),
+                    Some("OPTIONS") => Some(reqwest::Method::OPTIONS),
+                    Some("DELETE") => Some(reqwest::Method::DELETE),
+                    Some("TRACE") => Some(reqwest::Method::TRACE),
+                    Some("CONNECT") => Some(reqwest::Method::CONNECT),
+                    _ => None,
                 };
 
-                if let Ok(m) = method {
+                if let Some(m) = method {
                     parsed_args.method = m;
                     parsed_method = true;
                     continue;
@@ -221,16 +221,17 @@ impl Args {
             }
 
             // otherwise, try to parse request items
-            if let Some((typ, (key, val))) = parse_var(argv.unwrap().to_string()) {
+            if let Some((typ, key, val)) = parse_var(argv.unwrap().to_string()) {
                 match typ {
                     RequestItemType::Header => {
-                        let header = reqwest::header::HeaderName::from_bytes(key.as_bytes())?;
+                        let header =
+                            reqwest::header::HeaderName::from_bytes(key.as_bytes())?;
                         parsed_args.headers.insert(header, val.parse()?);
-                    },
+                    }
                     RequestItemType::KeyVal | RequestItemType::RawJson => {
-                        parsed_args.data.push((key, val));
-                    },
-                    _ => panic!("got unknown request item")
+                        parsed_args.data.push((typ, key, val));
+                    }
+                    RequestItemType::Query => {}
                 }
                 continue;
             }
@@ -242,41 +243,46 @@ impl Args {
             ))));
         }
 
+        // Catch missing url early, otherwise we'll show user an error from reqwest
+        // "relative URL without base"
+        if parsed_args.url.len() == 0
+            && parsed_args.command != Command::PrintHelp
+            && parsed_args.command != Command::PrintVersion
+        {
+            return Err(Box::new(ParseError::new(
+                "missing url, run with -h to get help".to_string(),
+            )));
+        }
+
         return Ok(parsed_args);
     }
 }
 
-fn parse_var(arg: String) -> Option<(RequestItemType, (String,String))> {
+fn parse_var(arg: String) -> Option<(RequestItemType, String, String)> {
     let mut iter = arg.char_indices().peekable();
     while let Some((i, c)) = iter.next() {
-        let typ = if c == ':' {
-            // a:b || a:=b
-            match iter.peek() {
-                Some(&(_, k)) if k == '=' => RequestItemType::RawJson,
-                _ => RequestItemType::Header,
-            }
-        } else if c == '=' {
-            // a=b
-            RequestItemType::KeyVal
-        } else {
-            RequestItemType::Unknown
+        let typ = match c {
+            //  Why tf does _ not work ?
+            ':' if Some(&(i + 1, '=')) == iter.peek() => Some(RequestItemType::RawJson),
+            ':' => Some(RequestItemType::Header),
+            '=' if Some(&(i + 1, '=')) == iter.peek() => Some(RequestItemType::Query),
+            '=' => Some(RequestItemType::KeyVal),
+            _ => None,
         };
 
-        if typ != RequestItemType::Unknown {
-            let var = match typ {
-                RequestItemType::RawJson => {
-                    (arg[0..i].to_string(), arg[i+2..].to_string())
-                },
+        if let Some(itt) = typ {
+            let (key, val) = match itt {
+                RequestItemType::RawJson | RequestItemType::Query => {
+                    (arg[0..i].to_string(), arg[i + 2..].to_string())
+                }
                 RequestItemType::KeyVal | RequestItemType::Header => {
-                    (arg[0..i].to_string(), arg[i+1..].to_string())
-                },
-                _ => panic!("probably forgot to add parser for new request item")
+                    (arg[0..i].to_string(), arg[i + 1..].to_string())
+                }
             };
-            return Some((typ, var));
-
+            return Some((itt, key, val));
         }
     }
-    return None
+    return None;
 }
 
 #[cfg(test)]
@@ -284,17 +290,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn needurl() {
+        Args::parse(vec!["program", "someurl.com"]).unwrap();
+        assert!(Args::parse(vec!["program"]).is_err());
+    }
+
+    #[test]
     fn longopts() {
-        let args = Args::parse(vec!["program", "--form"]).unwrap();
+        let args = Args::parse(vec!["program", "someurl.com", "--form"]).unwrap();
         assert_eq!(args.format, ContentType::Form);
     }
 
     #[test]
     fn shortops() {
-        let args = Args::parse(vec!["program", "-fm"]).unwrap();
+        let args = Args::parse(vec!["program", "somurl.com", "-fm"]).unwrap();
         assert_eq!(args.format, ContentType::Multipart);
 
-        let args = Args::parse(vec!["program", "-mf"]).unwrap();
+        let args = Args::parse(vec!["program", "somurl.com", "-mf"]).unwrap();
         assert_eq!(args.format, ContentType::Form);
     }
 
@@ -316,8 +328,7 @@ mod tests {
         ];
         // explicit method
         for (name, method) in methods {
-            let args =
-                Args::parse(vec!["program", name, "someurl.com"]).unwrap();
+            let args = Args::parse(vec!["program", name, "someurl.com"]).unwrap();
             assert_eq!(args.method, method);
         }
     }
@@ -333,16 +344,39 @@ mod tests {
         assert_eq!(args.url, "http://localhost:3000/hej");
 
         // implicit http
-        let args =
-            Args::parse(vec!["program", "somesite.com:3000/hej"]).unwrap();
+        let args = Args::parse(vec!["program", "somesite.com:3000/hej"]).unwrap();
         assert_eq!(args.url, "http://somesite.com:3000/hej");
     }
 
     #[test]
     fn request_items() {
-        let test1 = parse_var(String::from("x-api-key:1")).unwrap();
-        assert_eq!(test1.0, RequestItemType::Header);
-        assert_eq!((test1.1).0, "x-api-key");
-        assert_eq!((test1.1).1, "1");
+        assert!(
+            Some((
+                RequestItemType::Header,
+                String::from("x-api-key"),
+                String::from("1")
+            )) == parse_var(String::from("x-api-key:1"))
+        );
+
+        assert!(
+            Some((
+                RequestItemType::KeyVal,
+                String::from("x-api-key"),
+                String::from("1")
+            )) == parse_var(String::from("x-api-key=1"))
+        );
+
+        assert!(
+            Some((
+                RequestItemType::RawJson,
+                String::from("x-api-key"),
+                String::from("1")
+            )) == parse_var(String::from("x-api-key:=1"))
+        );
+
+        assert!(
+            Some((RequestItemType::Query, String::from("search"), String::from("1")))
+                == parse_var(String::from("search==1"))
+        );
     }
 }

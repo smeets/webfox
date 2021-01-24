@@ -1,4 +1,5 @@
 use serde_json as json;
+use serde_json;
 use std::env;
 use std::error;
 use std::io::Write;
@@ -12,7 +13,7 @@ pub type Result<T> = ::std::result::Result<T, Box<dyn error::Error>>;
 
 fn main() {
     if let Err(err) = Args::parse(env::args_os()).and_then(try_main) {
-        eprintln!("{}", err);
+        eprintln!("{:}", err);
         process::exit(2);
     }
 }
@@ -26,13 +27,7 @@ fn try_main(args: Args) -> Result<()> {
 }
 
 fn run_request(args: Args) -> Result<()> {
-    let url = match reqwest::Url::parse(&args.url) {
-        Ok(u) => u,
-        Err(e) => {
-            eprintln!("Error parsing URL '{:}'", &args.url);
-            return Err(Box::new(e));
-        }
-    };
+    let url = reqwest::Url::parse(&args.url)?;
 
     let req = reqwest::blocking::Client::new()
         .request(args.method, url)
@@ -41,31 +36,36 @@ fn run_request(args: Args) -> Result<()> {
 
     let res = if args.data.len() > 0 {
         match args.format {
-            cli::ContentType::Form => req.form(&args.data),
-            cli::ContentType::Json => req.json(&args.data),
-            cli::ContentType::Multipart => req.multipart(reqwest::blocking::multipart::Form::new()),
+            cli::ContentType::Form => req.form(&build_form(&args.data)?),
+            cli::ContentType::Json => req.json(&build_json(&args.data)?),
+            cli::ContentType::Multipart => {
+                req.multipart(reqwest::blocking::multipart::Form::new())
+            }
         }
     } else {
         req
-    }.send()?;
+    }
+    .send()?;
 
-    let mut stdout = StandardStream::stdout(ColorChoice::Always);
-    println!("{:?} {:?}", res.version(), res.status());
+    let mut stderr = StandardStream::stderr(ColorChoice::Always);
+    eprintln!("{:?} {:?}", res.version(), res.status());
     for (key, val) in res.headers().iter() {
-        write!(&mut stdout, "{}: ", key)?;
-        stdout.set_color(ColorSpec::new().set_fg(Some(Color::Green)))?;
-        write!(&mut stdout, "{}\n", val.to_str()?)?;
-        stdout.reset()?;
+        write!(&mut stderr, "{}: ", key)?;
+        stderr.set_color(ColorSpec::new().set_fg(Some(Color::Green)))?;
+        write!(&mut stderr, "{}\n", val.to_str()?)?;
+        stderr.reset()?;
     }
 
-    println!("");
+    eprintln!("");
 
-    if let Some(content_type) =
-        res.headers().get(reqwest::header::CONTENT_TYPE)
-    {
+    let mut stdout = StandardStream::stdout(ColorChoice::Always);
+    if let Some(content_type) = res.headers().get(reqwest::header::CONTENT_TYPE) {
         if content_type.to_str()?.contains("application/json") {
-            let message = res.json::<json::Value>().unwrap();
-            json::to_writer_pretty(&mut stdout, &message)?;
+            match res.json::<json::Value>() {
+                Ok(message) => json::to_writer_pretty(&mut stdout, &message)?,
+                Err(_) => {} //print!("{}", err)
+            };
+
             println!("");
         } else {
             writeln!(&mut stdout, "{}", res.text().unwrap())?;
@@ -75,64 +75,59 @@ fn run_request(args: Args) -> Result<()> {
     return Ok(());
 }
 
-fn print_usage() {
-    eprintln!("{}", "\
-USAGE: wx [FLAGS] [METHOD] URL [PARAM [PARAM ...]]
+fn build_form(
+    _args: &Vec<(cli::RequestItemType, String, String)>,
+) -> Result<std::collections::HashMap<String, String>> {
+    Ok(std::collections::HashMap::new())
+}
 
-webfox (wx) is a json-default, simple HTTP client in the spirit of httpie.
+fn build_json(
+    args: &Vec<(cli::RequestItemType, String, String)>,
+) -> Result<serde_json::Value> {
+    let mut map = serde_json::Map::new();
+    for (typ, key, val) in args.iter() {
+        let x = match typ {
+            cli::RequestItemType::KeyVal => serde_json::Value::String(val.to_string()),
+            cli::RequestItemType::RawJson => serde_json::from_str(val)
+                .map_err(|err| format!("error parsing json: {}", err.to_string()))?,
+            _ => unreachable!(),
+        };
+        map.insert(key.to_string(), x);
+    }
+    Ok(serde_json::Value::Object(map))
+}
+
+fn print_usage() {
+    eprintln!(
+        "{}",
+        "\
+usage: wx [FLAGS] [METHOD] URL [PARAM [PARAM ...]]
 
 FLAGS:
-    -f, --form        Encode body as application/x-www-form-urlencoded
+    -f, --form        Encode body data as application/x-www-form-urlencoded
     -d, --debug       Print request headers and body
     -h, --help        Print this help message
     -v, --version     Print version information
 
 METHOD:
-    The case sensitive HTTP method to be used for the request, allowed:
-
-    GET, POST, PUT, HEAD, PATCH, DELETE, CONNECT, TRACE
-
-    Defaults to POST if any data is to be sent, otherwise GET is used.
-
-URL:
+    GET, POST, PUT, HEAD, PATCH, DELETE, CONNECT or TRACE
+    Defaults to POST if body data PARAM exists, otherwise GET.
 
 PARAM:
-    Optional key-value pairs specifying a http header, query string or data
-    to be included in the request. Can be specified in any order.
+    HTTP Header:        name:value  (e.g. Host:google.com)
+    Query string:       name?value  (e.g. q?hej)
+    Body data (string): name=value  (e.g. first=john)
+    Body data (json):   name:=value (e.g. values:='[1,2,3]')
 
-    name:value - HTTP Header
-
-        Host:google.com X-Api-Key:notverysecure
-
-    name=value - Body data (string)
-
-        first=john last=doe name=\"john doe\"
-
-        form --> first=john&last=doe&name=john%20doe
-        json --> {{
-            \"first\": \"john\",
-            \"last\": \"doe\",
-            \"name\": \"john doe\"
-        }}
-
-    name:=value - JSON body data
-
-        values:='[1,2,3]' quit:=true tree:='{{\"name\":\"root\", \"children\":[]}}'
-
-        json --> {{
-            \"values\": [1,2,3],
-            \"quit\": true,
-            \"tree\": {{
-                \"name\": \"root\",
-                \"children\": []
-            }}
-        }}
-
+EXAMPLE:
+    wx POST https://my.api.se/some X-API-KEY:badcat key=home count:=5
+    wx https://google.com q?\"batman movies\"
 
 https://github.com/smeets/webfox
-Axel Smeets <murlocbrand@gmail.com>");
+Axel Smeets <murlocbrand@gmail.com>"
+    );
 }
 
 fn print_version() {
-    eprintln!("{:}", env!("CARGO_PKG_VERSION"));
+    eprintln!("webfox {:}", env!("CARGO_PKG_VERSION"));
 }
