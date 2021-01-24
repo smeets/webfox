@@ -21,6 +21,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
+      - name: Set env
+        run: echo ::set-env name=RELEASE_VERSION::$(echo ${GITHUB_REF:10})
       - name: Build project
         run: cargo build --release --locked
       - name: Upload binary to release
@@ -29,4 +31,4 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: target/release/${{ matrix.artifact_name }}
           asset_name: ${{ matrix.asset_name }}
-          tag: ${{ github.event.client_payload.new_version }}
+          tag: ${{ RELEASE_VERSION }}
