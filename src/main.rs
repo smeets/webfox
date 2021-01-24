@@ -76,9 +76,13 @@ fn run_request(args: Args) -> Result<()> {
 }
 
 fn build_form(
-    _args: &Vec<(cli::RequestItemType, String, String)>,
-) -> Result<std::collections::HashMap<String, String>> {
-    Ok(std::collections::HashMap::new())
+    args: &Vec<(cli::RequestItemType, String, String)>,
+) -> Result<std::collections::HashMap<&String, &String>> {
+    let mut map = std::collections::HashMap::new();
+    for (_, key, val) in args.iter() {
+        map.insert(key, val);
+    }
+    Ok(map)
 }
 
 fn build_json(
