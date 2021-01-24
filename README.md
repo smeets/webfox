@@ -11,4 +11,8 @@
 - Form mode
 	- [x] Key-value (`q=search` --> `q=search`)
 - [x] Colorized JSON and HTTP headers output
-- [ ] verbose output option (`-V`)
+- [ ] Verbose output option (`-V`)
+- [ ] Redirection policy (`--no-follow`, `--follow`)
+- [ ] Proxy support (`--proxy {}`)
+- [ ] Trust custom root certificates (`--trust-cert {}`)
+- [ ] Use client identity (`--identity {}`)
