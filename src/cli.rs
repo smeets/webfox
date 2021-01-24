@@ -231,7 +231,9 @@ impl Args {
                     RequestItemType::KeyVal | RequestItemType::RawJson => {
                         parsed_args.data.push((typ, key, val));
                     }
-                    RequestItemType::Query => {}
+                    RequestItemType::Query => {
+                        parsed_args.query.push((key, val));
+                    }
                 }
                 continue;
             }

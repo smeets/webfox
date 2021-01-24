@@ -115,13 +115,13 @@ METHOD:
 
 PARAM:
     HTTP Header:        name:value  (e.g. Host:google.com)
-    Query string:       name?value  (e.g. q?hej)
+    Query string:       name==value (e.g. q==search)
     Body data (string): name=value  (e.g. first=john)
-    Body data (json):   name:=value (e.g. values:='[1,2,3]')
+    Body data (json):   name:=value (e.g. values:=\"[1,2,3]\")
 
 EXAMPLE:
     wx POST https://my.api.se/some X-API-KEY:badcat key=home count:=5
-    wx https://google.com q?\"batman movies\"
+    wx https://google.com q==\"batman movies\"
 
 https://github.com/smeets/webfox
 Axel Smeets <murlocbrand@gmail.com>"
