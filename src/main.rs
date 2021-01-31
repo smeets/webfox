@@ -34,16 +34,12 @@ fn run_request(args: Args) -> Result<()> {
         .query(&args.query)
         .headers(args.headers);
 
-    let res = if args.data.len() > 0 {
-        match args.format {
-            cli::ContentType::Form => req.form(&build_form(&args.data)?),
-            cli::ContentType::Json => req.json(&build_json(&args.data)?),
-            cli::ContentType::Multipart => {
-                req.multipart(reqwest::blocking::multipart::Form::new())
-            }
+    let res = match args.format {
+        cli::ContentType::Form => req.form(&build_form(&args.data)?),
+        cli::ContentType::Json => req.json(&build_json(&args.data)?),
+        cli::ContentType::Multipart => {
+            req.multipart(reqwest::blocking::multipart::Form::new())
         }
-    } else {
-        req
     }
     .send()?;
 
@@ -58,19 +54,17 @@ fn run_request(args: Args) -> Result<()> {
 
     eprintln!("");
 
-    let mut stdout = StandardStream::stdout(ColorChoice::Always);
-    if let Some(content_type) = res.headers().get(reqwest::header::CONTENT_TYPE) {
-        if content_type.to_str()?.contains("application/json") {
-            match res.json::<json::Value>() {
-                Ok(message) => json::to_writer_pretty(&mut stdout, &message)?,
-                Err(_) => {} //print!("{}", err)
-            };
+    let mut stdout = StandardStream::stdout(ColorChoice::Auto);
 
-            println!("");
-        } else {
-            writeln!(&mut stdout, "{}", res.text().unwrap())?;
-        }
-    }
+
+    match res.content_length() {
+        Some(length) if length > 0 => match res.headers().get(reqwest::header::CONTENT_TYPE) {
+            Some(content_type) if content_type.to_str()?.contains("application/json") => json::to_writer_pretty(&mut stdout, &res.json::<json::Value>()?)?,
+            _ => stdout.write_all(res.text()?.as_bytes())?
+        },
+        Some(_) => {}, /* content_length == 0 */
+        _ => stdout.write_all(res.text()?.as_bytes())?
+    };
 
     return Ok(());
 }
