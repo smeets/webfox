@@ -56,14 +56,22 @@ fn run_request(args: Args) -> Result<()> {
 
     let mut stdout = StandardStream::stdout(ColorChoice::Auto);
 
+    let content_type_json =
+        reqwest::header::HeaderValue::from_static("application/json");
 
+    // Trying to json pretty print from an empty body will return error.
+    // Only print json if we think we are sure enough that content exists.
     match res.content_length() {
-        Some(length) if length > 0 => match res.headers().get(reqwest::header::CONTENT_TYPE) {
-            Some(content_type) if content_type.to_str()?.contains("application/json") => json::to_writer_pretty(&mut stdout, &res.json::<json::Value>()?)?,
-            _ => stdout.write_all(res.text()?.as_bytes())?
-        },
-        Some(_) => {}, /* content_length == 0 */
-        _ => stdout.write_all(res.text()?.as_bytes())?
+        Some(length) if length > 0 => {
+            match res.headers().get(reqwest::header::CONTENT_TYPE) {
+                Some(x) if x == content_type_json => {
+                    json::to_writer_pretty(&mut stdout, &res.json::<json::Value>()?)?
+                }
+                _ => stdout.write_all(res.text()?.as_bytes())?,
+            }
+        }
+        Some(_) => {} /* content_length == 0 */
+        _ => stdout.write_all(res.text()?.as_bytes())?,
     };
 
     return Ok(());
